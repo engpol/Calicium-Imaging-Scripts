@@ -1,0 +1,94 @@
+//THE FOLLOWING MACRO IS FOR USING STARDIST TO AUTOMATICALLY GENERATE ROIS FOR CALCIUM IMAGING EXPERIMENTS
+//YOUR FOLDER SHOULD BE ORGANISED SO THAT EACH EXPERIMENT HAS 1 FOLDER, WITHIN THIS FOLDER, SHOULD BE A FOLDER CONTAINING RAW TIFF IMAGES OF THE TIME LAPSE - imagesequence
+//BASIC IDEA - THE IMAGE OF THE PEAK OF THE KCL RESPONSE (USUALLY 1 MIN FROM START OF KCL) HAS THE MAXIMUM SIGNAL-NOISE AND THUS IS BACKGROUND SUBTRACTED AND USED BY THE STAR DIST NETWORK TO GENERATE ROIS
+//FILTER THE STARDIST RESULT- ALL NEURONS WHICH DO NOT EXHIBIT A KCL PEAK AND ARE TOO SMALL ARE AUTOMATICALLY REMOVED
+//ROIS ARE RENAMED ACCORDING TO THE NAMING CONVENTION SPECIFIED - Conv
+
+
+run("Fresh Start");
+
+setBatchMode(true);
+
+//Parameters
+#@ Integer(label="Image Number KCL Peak", value = 130, style="spinner") KCL
+#@ Integer(label="Background Subtraction:", value = 50, style="spinner") BGSub
+#@ File(label="Experiment Folder", value = "C:/", style="directory") folder
+#@ File(label="Image Sequence Folder", value = "C:/", style="directory") imagesequence
+#@ String(label = "Naming Convention", description = "Name") Conv
+
+File.mkdir(folder + "/StarDistROI");
+File.mkdir(folder + "/Background_Subtracted");
+
+
+list = getFileList(imagesequence);
+
+if (KCL <= list.length) { // check if there are enough files in the directory
+    open(list[KCL]); // open the file at the desired index
+} else {
+    print("There are not enough files in the directory."); // print an error message
+}
+
+
+run("Subtract Background...", "rolling="+BGSub);
+save(folder + "/Background_Subtracted"+"/Subtracted.tif");
+rename("C2-BGSUB");
+run("Command From Macro", "command=[de.csbdresden.stardist.StarDist2D], args=['input':'C2-BGSUB', 'modelChoice':'Versatile (fluorescent nuclei)', 'normalizeInput':'true', 'percentileBottom':'0.8', 'percentileTop':'99.60000000000001', 'probThresh':'0.8', 'nmsThresh':'0.05', 'outputType':'Both', 'nTiles':'1', 'excludeBoundary':'2', 'roiPosition':'Automatic', 'verbose':'false', 'showCsbdeepProgress':'false', 'showProbAndDist':'false'], process=[false]");
+close("*");
+
+// RUNNING AUTOMATIC ROIS ON IMAGE SEQUENCE 
+
+//SELECT AREA AND MEAN GRAY VALUE
+run("Set Measurements...", "area mean redirect=None decimal=3");
+
+File.openSequence(imagesequence,"step=1");
+run("Subtract Background...", "rolling=50 stack");
+File.mkdir(folder + "/ResultsTables");
+to_be_deleted = newArray();
+
+//Filter through ROIs in ROI manager and remove if the KCL peak is
+//not at least 1.25x the baseline, also remove small cells made by Stardist
+
+n = roiManager('count');
+for (i = 0; i < n; i++) {
+    roiManager('select', i);
+    roiManager("Multi Measure");
+    mean1 = getResult("Mean1", KCL);
+    mean2 = getResult("Mean1", 30);
+    area = getResult("Area1", 1);
+    if (mean1 < 1.25 *mean2) {
+    	 to_be_deleted = Array.concat(to_be_deleted, i);
+    }
+    if (area < 400) {
+    	 to_be_deleted = Array.concat(to_be_deleted, i);
+    }
+}
+
+roiManager("Select", to_be_deleted);
+roiManager("Delete");
+roiManager("save", folder + "/StarDistROI" + "/StarDist_ROI.zip");
+
+//Rename ROIS 
+
+setBatchMode(false);
+close();
+File.openSequence(imagesequence,"step=1");
+
+
+waitForUser("Click ok when done cleaning up traces");
+
+j = roiManager('count');
+
+for (i = 0; i < j; i++) {
+    roiManager('select', i);
+    // process roi here
+    roiManager("Rename", Conv+(i+1));
+}
+roiManager('select', j-1);
+roiManager("Rename", Conv+"BACKGROUND")
+
+
+run("Set Measurements...", "mean redirect=None decimal=3");
+roiManager("deselect");
+roiManager("multi measure");
+
+    saveAs("Results", folder + "/ResultsTables" + "/Results.csv");
